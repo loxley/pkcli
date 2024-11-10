@@ -124,7 +124,7 @@ pub async fn run(matches: ArgMatches) -> Result<()> {
     };
 
     for path in paths {
-        println!("Processing: {:?}", path);
+        eprintln!("Processing: {:?}", path);
 
         let mut json_data: KeyCloakRealmExport = read_json(&path)?;
 
@@ -164,7 +164,7 @@ fn run_update_avp(config: &Config, json_data: &mut Value, path: &Path) -> Result
     // Write out to YAML
     let yaml: YamlValue = convert_json_to_yaml(&json_data)?;
     let filename = path.with_extension("yaml");
-    println!("Writing file: {:?}", filename);
+    eprintln!("Writing file: {:?}", filename);
     let file = File::create(&filename)?;
     serde_yaml::to_writer(file, &yaml)?;
     Ok(())
@@ -193,9 +193,9 @@ async fn run_update_vault(
     synchronize_keys(&mut private_keys_vault_clone, &private_keys_value);
 
     if let Some(true) = compare_private_keys(&private_keys_value, &private_keys_vault_clone) {
-        println!("No changes detected, not updating secrets in Vault");
+        eprintln!("No changes detected, not updating secrets in Vault");
     } else {
-        println!("Changes detected, updating secrets in Vault");
+        eprintln!("Changes detected, updating secrets in Vault");
         merge_json(&mut private_keys_vault, &private_keys_value);
         set_secrets_vault(
             vault_client,
@@ -270,7 +270,7 @@ fn synchronize_keys(obj_1: &mut Value, obj_2: &Value) {
 
         // Remove those keys from obj_1
         for key in keys_to_remove {
-            // println!("Key not present in source file: {}", key);
+            // eprintln!("Key not present in source file: {}", key);
             map1.remove(&key);
         }
     }
@@ -285,7 +285,7 @@ fn compare_private_keys(file: &Value, vault: &Value) -> Option<bool> {
         {
             Some(true)
         } else {
-            println!("Source had no private keys, keycloak export gone wrong?");
+            eprintln!("Source had no private keys, keycloak export gone wrong?");
             Some(true)
         }
     } else {
@@ -390,7 +390,7 @@ async fn set_secrets_vault(
     let status = kv2::set(client, mount, path, data).await.with_context(|| {
         format!("Failed to set secret in 'set_secrets_vault' (mount: {mount}, path: {path})")
     })?;
-    println!("Wrote secret to vault, version: {:?}", status.version);
+    eprintln!("Wrote secret to vault, version: {:?}", status.version);
     Ok(true)
 }
 
