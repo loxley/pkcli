@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use serde_yaml::Value as YamlValue;
 use std::collections::HashMap;
 use std::fs::{read_dir, File};
-use std::io::{stdin, BufReader};
+use std::io::{stdin, stdout, BufReader};
 use std::path::{Path, PathBuf};
 use vaultrs::client::{Client, VaultClient, VaultClientSettingsBuilder};
 use vaultrs::error::ClientError;
@@ -161,12 +161,18 @@ fn run_update_avp(config: &Config, json_data: &mut Value, path: &Path) -> Result
     json_data["spec"]["keycloakCRname"] =
         Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
 
-    // Write out to YAML
+    // Write YAML
     let yaml: YamlValue = convert_json_to_yaml(&json_data)?;
-    let filename = path.with_extension("yaml");
-    eprintln!("Writing file: {:?}", filename);
-    let file = File::create(&filename)?;
-    serde_yaml::to_writer(file, &yaml)?;
+    if path.as_os_str() == "-" {
+        // stdout
+        serde_yaml::to_writer(stdout(), &yaml)?;
+    } else {
+        // file
+        let filename = path.with_extension("yaml");
+        eprintln!("Writing file: {:?}", filename);
+        let file = File::create(&filename)?;
+        serde_yaml::to_writer(file, &yaml)?;
+    }
     Ok(())
 }
 
