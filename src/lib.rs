@@ -18,7 +18,6 @@ type VaultSecrets = Value;
 struct Config {
     cluster: String,
     kv_path: String,
-    _path_is_file: bool,
     path: PathBuf,
     subcmd: String,
     vault_addr: String,
@@ -48,11 +47,9 @@ impl Config {
             .expect("'cluster' should always have a value");
 
         // File or directory path
-        let mut path_is_file = false;
         let path: PathBuf;
         if let Some(filename) = matches.get_one::<PathBuf>("filename") {
             path = filename.clone();
-            path_is_file = true;
         } else if let Some(directory) = matches.get_one::<PathBuf>("directory") {
             path = directory.clone()
         } else {
@@ -87,7 +84,6 @@ impl Config {
             cluster,
             kv_path,
             path,
-            _path_is_file: path_is_file,
             subcmd,
             vault_addr,
             vault_mount,
