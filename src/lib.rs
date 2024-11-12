@@ -17,8 +17,8 @@ type VaultSecrets = Value;
 #[derive(Debug)]
 struct Config {
     cluster: String,
+    keycloak_cr_name: String,
     kv_path: String,
-    _path_is_file: bool,
     path: PathBuf,
     subcmd: String,
     vault_addr: String,
@@ -47,12 +47,20 @@ impl Config {
             .cloned()
             .expect("'cluster' should always have a value");
 
+        // Keycloak CR name
+        let keycloak_cr_name = matches
+            .get_one::<String>("keycloak_cr_name")
+            .cloned()
+            .unwrap_or_default();
+
         // File or directory path
-        let mut path_is_file = false;
         let path: PathBuf;
         if let Some(filename) = matches.get_one::<PathBuf>("filename") {
             path = filename.clone();
-            path_is_file = true;
+            // Require keycloak-cr-name if reading from stdin
+            if path.as_os_str() == "-" && keycloak_cr_name.is_empty() {
+                bail!("Please provide --keycloak-cr-name if reading from stdin\n\nFor more information, try '--help'.");
+            }
         } else if let Some(directory) = matches.get_one::<PathBuf>("directory") {
             path = directory.clone()
         } else {
@@ -85,9 +93,9 @@ impl Config {
 
         Ok(Config {
             cluster,
+            keycloak_cr_name,
             kv_path,
             path,
-            _path_is_file: path_is_file,
             subcmd,
             vault_addr,
             vault_mount,
@@ -154,13 +162,17 @@ fn run_update_avp(config: &Config, json_data: &mut Value, path: &Path) -> Result
 
     // Append CRD stuff
     let mut json_data: KeyCloakRealmImport = crd_base(json_data).unwrap();
-    json_data["metadata"]["name"] =
-        Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
 
-    // Unsure if this should be a option or not
-    json_data["spec"]["keycloakCRname"] =
-        Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
-
+    // Check if keycloakCRname is set
+    if !config.keycloak_cr_name.is_empty() && !Path::new(&config.path).is_dir() {
+        json_data["metadata"]["name"] = Value::String(config.keycloak_cr_name.to_string());
+        json_data["spec"]["keycloakCRname"] = Value::String(config.keycloak_cr_name.to_string());
+    } else {
+        json_data["metadata"]["name"] =
+            Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
+        json_data["spec"]["keycloakCRname"] =
+            Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
+    }
     // Write YAML
     let yaml: YamlValue = convert_json_to_yaml(&json_data)?;
     if path.as_os_str() == "-" {

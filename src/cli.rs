@@ -74,6 +74,15 @@ pub fn build_cli() -> Command {
                 .help("Specifies the Vault secret path (to override calculated path)")
                 .value_parser(NonEmptyStringValueParser::new()),
         )
+        .arg(
+            Arg::new("keycloak_cr_name")
+                .short('k')
+                .long("keycloak-cr-name")
+                .value_name("KEYCLOAK_CR_NAME")
+                .help("Specifies the Keycloak CR name (use with 'f' option)")
+                .value_parser(NonEmptyStringValueParser::new())
+                .requires("filename"),
+        )
         // Subcommands
         .subcommand(
             Command::new("update-avp").about("Updates private keys with argocd-vault-plugin path"),
