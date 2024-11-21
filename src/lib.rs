@@ -19,6 +19,7 @@ struct Config {
     cluster: String,
     keycloak_cr_name: String,
     kv_path: String,
+    output_directory: PathBuf,
     path: PathBuf,
     subcmd: String,
     vault_addr: String,
@@ -67,6 +68,12 @@ impl Config {
             bail!("Please provide either --filename or --directory\n\nFor more information, try '--help'.");
         };
 
+        // Output directory
+        let output_directory = matches
+            .get_one::<PathBuf>("output_directory")
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("."));
+
         // Misc config
         let kv_path = String::from("openshift/argocd");
 
@@ -95,6 +102,7 @@ impl Config {
             cluster,
             keycloak_cr_name,
             kv_path,
+            output_directory,
             path,
             subcmd,
             vault_addr,
@@ -180,9 +188,11 @@ fn run_update_avp(config: &Config, json_data: &mut Value, path: &Path) -> Result
         serde_yaml::to_writer(stdout(), &yaml)?;
     } else {
         // file
-        let filename = path.with_extension("yaml");
-        eprintln!("Writing file: {:?}", filename);
-        let file = File::create(&filename)?;
+        let yaml_file = config
+            .output_directory
+            .join(path.with_extension("yaml").file_name().unwrap_or_default());
+        eprintln!("Writing file: {:?}", yaml_file);
+        let file = File::create(&yaml_file)?;
         serde_yaml::to_writer(file, &yaml)?;
     }
     Ok(())
