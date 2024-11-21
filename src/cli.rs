@@ -36,6 +36,14 @@ pub fn build_cli() -> Command {
                 .value_parser(ValueParser::from(parse_directory_path)),
         )
         .arg(
+            Arg::new("output_directory")
+                .short('o')
+                .long("output-directory")
+                .value_name("OUTPUT_DIR")
+                .help("Specifies the output directory (defaults to current directory)")
+                .value_parser(ValueParser::from(parse_directory_path)),
+        )
+        .arg(
             Arg::new("vault_addr")
                 .short('a')
                 .long("vault-addr")
@@ -81,6 +89,7 @@ pub fn build_cli() -> Command {
                 .value_name("KEYCLOAK_CR_NAME")
                 .help("Specifies the Keycloak CR name (use with 'f' option)")
                 .value_parser(NonEmptyStringValueParser::new())
+                .conflicts_with("directory")
                 .requires("filename"),
         )
         // Subcommands
