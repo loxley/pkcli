@@ -89,6 +89,7 @@ pub fn build_cli() -> Command {
                 .value_name("KEYCLOAK_CR_NAME")
                 .help("Specifies the Keycloak CR name (use with 'f' option)")
                 .value_parser(NonEmptyStringValueParser::new())
+                .conflicts_with("directory")
                 .requires("filename"),
         )
         // Subcommands
