@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.95"
-clap = { version = "4.5.26", features = ["env"] }
+clap = { version = "4.5.27", features = ["env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.137"
 serde_yaml = "0.9.34"
