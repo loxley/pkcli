@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Get release name
+        id: release_name
+        run: |
+          RELEASE_NAME=$(target/release/pkcli --version | awk '{print $2}')
+          echo "name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Rename binary
+        run: mv target/release/pkcli "${{ steps.release_name.outputs.name }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          "${{ steps.release_name.outputs.name }}"
+          --title "${{ github.ref_name }}"
+          --generate-notes
