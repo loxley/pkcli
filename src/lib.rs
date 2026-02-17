@@ -14,6 +14,13 @@ type KeyCloakRealmExport = Value;
 type KeyCloakRealmImport = Value;
 type VaultSecrets = Value;
 
+#[derive(Debug, PartialEq)]
+enum SubCommand {
+    UpdateAvp,
+    UpdateVault,
+    All,
+}
+
 #[derive(Debug)]
 struct Config {
     cluster: String,
@@ -21,7 +28,7 @@ struct Config {
     kv_path: String,
     output_directory: PathBuf,
     path: PathBuf,
-    subcmd: String,
+    subcmd: SubCommand,
     vault_addr: String,
     vault_mount: String,
     vault_path: String,
@@ -29,7 +36,7 @@ struct Config {
 }
 
 impl Config {
-    fn from_matches(matches: &clap::ArgMatches) -> Result<Self> {
+    fn from_matches(matches: &ArgMatches) -> Result<Self> {
         // Accessing global options
         let vault_mount = matches
             .get_one::<String>("vault_mount")
@@ -84,19 +91,11 @@ impl Config {
             .unwrap_or_else(|| format!("{kv_path}/{cluster}"));
 
         // Handle subcommands
-        let mut subcmd = String::new();
-        match matches.subcommand() {
-            Some(("update-avp", _sub_matches)) => {
-                subcmd = String::from("update-avp");
-            }
-            Some(("update-vault", _sub_matches)) => {
-                subcmd = String::from("update-vault");
-            }
-            Some(("do-all-tasks", _sub_matches)) => {
-                subcmd = String::from("do-all-tasks");
-            }
-            _ => (),
-        }
+        let subcmd = match matches.subcommand() {
+            Some(("update-avp", _)) => SubCommand::UpdateAvp,
+            Some(("update-vault", _)) => SubCommand::UpdateVault,
+            _ => SubCommand::All,
+        };
 
         Ok(Config {
             cluster,
@@ -124,7 +123,7 @@ pub async fn run(matches: ArgMatches) -> Result<()> {
         .await
         .context("Failed connection health check")?;
 
-    let paths = if Path::new(&config.path).is_dir() {
+    let paths = if config.path.is_dir() {
         read_dir(&config.path)?
             .filter_map(|entry| {
                 let path = entry.ok()?.path();
@@ -136,7 +135,7 @@ pub async fn run(matches: ArgMatches) -> Result<()> {
             })
             .collect::<Vec<_>>()
     } else {
-        vec![Path::new(&config.path).to_path_buf()]
+        vec![config.path.clone()]
     };
 
     for path in paths {
@@ -151,13 +150,17 @@ pub async fn run(matches: ArgMatches) -> Result<()> {
         get_private_keys(&json_data, &mut private_keys_file)?;
 
         // Run subcommand tasks
-        if config.subcmd == "update-avp" {
-            run_update_avp(&config, &mut json_data, &path)?;
-        } else if config.subcmd == "update-vault" {
-            run_update_vault(&config, &vault_client, &private_keys_file).await?;
-        } else {
-            run_update_avp(&config, &mut json_data, &path)?;
-            run_update_vault(&config, &vault_client, &private_keys_file).await?;
+        match config.subcmd {
+            SubCommand::UpdateAvp => {
+                run_update_avp(&config, &mut json_data, &path)?;
+            }
+            SubCommand::UpdateVault => {
+                run_update_vault(&config, &vault_client, &private_keys_file).await?;
+            }
+            SubCommand::All => {
+                run_update_avp(&config, &mut json_data, &path)?;
+                run_update_vault(&config, &vault_client, &private_keys_file).await?;
+            }
         }
     }
     Ok(())
@@ -169,17 +172,16 @@ fn run_update_avp(config: &Config, json_data: &mut Value, path: &Path) -> Result
     set_private_keys(json_data, avp)?;
 
     // Append CRD stuff
-    let mut json_data: KeyCloakRealmImport = crd_base(json_data).unwrap();
+    let mut json_data: KeyCloakRealmImport = crd_base(json_data);
 
     // Check if keycloakCRname is set
-    if !config.keycloak_cr_name.is_empty() && !Path::new(&config.path).is_dir() {
+    if !config.keycloak_cr_name.is_empty() && !config.path.is_dir() {
         json_data["metadata"]["name"] = Value::String(config.keycloak_cr_name.to_string());
         json_data["spec"]["keycloakCRname"] = Value::String(config.keycloak_cr_name.to_string());
     } else {
-        json_data["metadata"]["name"] =
-            Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
-        json_data["spec"]["keycloakCRname"] =
-            Value::String(path.file_stem().unwrap().to_string_lossy().to_string());
+        let name = Value::String(path.file_stem().unwrap().to_string_lossy().into_owned());
+        json_data["metadata"]["name"] = name.clone();
+        json_data["spec"]["keycloakCRname"] = name;
     }
     // Write YAML
     let yaml: YamlValue = convert_json_to_yaml(&json_data)?;
@@ -220,11 +222,14 @@ async fn run_update_vault(
 
     synchronize_keys(&mut private_keys_vault_clone, &private_keys_value);
 
-    if let Some(true) = compare_private_keys(&private_keys_value, &private_keys_vault_clone) {
+    if compare_private_keys(&private_keys_value, &private_keys_vault_clone) {
+        if private_keys_value.as_object().is_none_or(|m| m.is_empty()) {
+            eprintln!("Source had no private keys, keycloak export gone wrong?");
+        }
         eprintln!("No changes detected, not updating secrets in Vault");
     } else {
         eprintln!("Changes detected, updating secrets in Vault");
-        merge_json(&mut private_keys_vault, &private_keys_value);
+        merge_json(&mut private_keys_vault, private_keys_value);
         set_secrets_vault(
             vault_client,
             &config.vault_mount,
@@ -237,7 +242,7 @@ async fn run_update_vault(
 }
 
 /// Attempts to read a JSON file
-fn read_json(filename: &PathBuf) -> Result<KeyCloakRealmExport> {
+fn read_json(filename: &Path) -> Result<KeyCloakRealmExport> {
     if filename.as_os_str() == "-" {
         // stdin
         let json_data: KeyCloakRealmExport = serde_json::from_reader(stdin())?;
@@ -262,83 +267,47 @@ fn avp_path_generator<'a>(
 
 /// Convert JSON to YAML
 fn convert_json_to_yaml(json_value: &KeyCloakRealmExport) -> Result<YamlValue> {
-    let json_string = serde_json::to_string(json_value)?;
-    let yaml_value: YamlValue = serde_yaml::from_str(&json_string)?;
-    Ok(yaml_value)
+    Ok(serde_yaml::to_value(json_value)?)
 }
 
 /// CR with exported JSON appended to spec realm
-fn crd_base(json_data: &KeyCloakRealmExport) -> Result<KeyCloakRealmImport> {
-    let crd_base = json!({
-        "apiVersion": "k8s.kecloak.org/v2alpha1",
+fn crd_base(json_data: &KeyCloakRealmExport) -> KeyCloakRealmImport {
+    json!({
+        "apiVersion": "k8s.keycloak.org/v2alpha1",
         "kind": "KeyCloakRealmImport",
         "metadata": {"name": ""},
         "spec": {
             "keycloakCRname": "",
             "realm": json_data
-    }
         }
-    );
-    Ok(crd_base)
+    })
 }
 
 /// Collect and remove keys that are in obj1 but not in obj2
 fn synchronize_keys(obj_1: &mut Value, obj_2: &Value) {
-    // Ensure both obj_1 and obj_2 are JSON objects
     if let (Value::Object(map1), Value::Object(map2)) = (obj_1, obj_2) {
-        // Collect the keys in obj_2
-        let keys_in_obj2: std::collections::HashSet<_> = map2.keys().collect();
-
-        // Collect keys that are in obj_1 but not in obj_2
-        let keys_to_remove: Vec<String> = map1
-            .keys()
-            .filter(|&k| !keys_in_obj2.contains(k))
-            .cloned()
-            .collect();
-
-        // Remove those keys from obj_1
-        for key in keys_to_remove {
-            // eprintln!("Key not present in source file: {}", key);
-            map1.remove(&key);
-        }
+        map1.retain(|k, _| map2.contains_key(k));
     }
 }
 
 /// Compare private keys from file and from vault
-fn compare_private_keys(file: &Value, vault: &Value) -> Option<bool> {
-    if file == vault {
-        // Check if both are non-empty arrays or non-empty objects
-        if (file.is_array() && !file.as_array().unwrap().is_empty())
-            || (file.is_object() && !file.as_object().unwrap().is_empty())
-        {
-            Some(true)
-        } else {
-            eprintln!("Source had no private keys, keycloak export gone wrong?");
-            Some(true)
-        }
-    } else {
-        None
-    }
+fn compare_private_keys(file: &Value, vault: &Value) -> bool {
+    file == vault
 }
 
 /// Merge two JSON objects recursively
-fn merge_json(target: &mut Value, source: &Value) {
+fn merge_json(target: &mut Value, source: Value) {
     if let (Value::Object(target_map), Value::Object(source_map)) = (target, source) {
-        // Merge each key-value pair from `source` into `target`
         for (key, value) in source_map {
-            match target_map.get_mut(key) {
-                Some(existing_value) => {
-                    // If both `existing_value` and `value` are objects, merge recursively
-                    if existing_value.is_object() && value.is_object() {
-                        merge_json(existing_value, value);
-                    } else {
-                        // Otherwise, replace `existing_value` with `value`
-                        *existing_value = value.clone();
-                    }
+            match target_map.get_mut(&key) {
+                Some(existing_value) if existing_value.is_object() && value.is_object() => {
+                    merge_json(existing_value, value);
                 }
-                // Insert if the key does not exist in `target`
+                Some(existing_value) => {
+                    *existing_value = value;
+                }
                 None => {
-                    target_map.insert(key.clone(), value.clone());
+                    target_map.insert(key, value);
                 }
             }
         }
@@ -414,12 +383,12 @@ async fn set_secrets_vault(
     mount: &str,
     path: &str,
     data: &Value,
-) -> Result<bool> {
+) -> Result<()> {
     let status = kv2::set(client, mount, path, data).await.with_context(|| {
         format!("Failed to set secret in 'set_secrets_vault' (mount: {mount}, path: {path})")
     })?;
     eprintln!("Wrote secret to vault, version: {:?}", status.version);
-    Ok(true)
+    Ok(())
 }
 
 /// Get private keys from keycloak exported JSON data
@@ -505,7 +474,7 @@ mod tests {
     #[test]
     fn private_convert_json_to_yaml() {
         let json_value = json!({
-            "apiVersion": "k8s.kecloak.org/v2alpha1",
+            "apiVersion": "k8s.keycloak.org/v2alpha1",
             "kind": "KeyCloakRealmImport",
             "metadata": {"name": "somemetadataname"},
             "spec": {
@@ -515,7 +484,7 @@ mod tests {
             }
         );
         let yaml_data_raw = "
-apiVersion: k8s.kecloak.org/v2alpha1
+apiVersion: k8s.keycloak.org/v2alpha1
 kind: KeyCloakRealmImport
 metadata:
   name: somemetadataname
@@ -526,5 +495,269 @@ spec:
 
         let yaml_value: YamlValue = serde_yaml::from_str(yaml_data_raw).unwrap();
         assert_eq!(convert_json_to_yaml(&json_value).unwrap(), yaml_value);
+    }
+
+    #[test]
+    fn merge_json_inserts_new_keys() {
+        let mut target = json!({"a": "1"});
+        let source = json!({"b": "2"});
+        merge_json(&mut target, source);
+        assert_eq!(target, json!({"a": "1", "b": "2"}));
+    }
+
+    #[test]
+    fn merge_json_overwrites_existing_keys() {
+        let mut target = json!({"a": "1", "b": "old"});
+        let source = json!({"b": "new"});
+        merge_json(&mut target, source);
+        assert_eq!(target, json!({"a": "1", "b": "new"}));
+    }
+
+    #[test]
+    fn merge_json_recursive_nested_objects() {
+        let mut target = json!({"outer": {"a": "1", "b": "old"}});
+        let source = json!({"outer": {"b": "new", "c": "3"}});
+        merge_json(&mut target, source);
+        assert_eq!(target, json!({"outer": {"a": "1", "b": "new", "c": "3"}}));
+    }
+
+    #[test]
+    fn merge_json_replaces_non_object_with_value() {
+        let mut target = json!({"a": "string"});
+        let source = json!({"a": {"nested": "obj"}});
+        merge_json(&mut target, source);
+        assert_eq!(target, json!({"a": {"nested": "obj"}}));
+    }
+
+    /// Helper: builds a realistic Keycloak realm export JSON with two KeyProvider entries
+    fn keycloak_realm_fixture() -> Value {
+        json!({
+            "id": "my-realm",
+            "realm": "my-realm",
+            "enabled": true,
+            "components": {
+                "org.keycloak.keys.KeyProvider": [
+                    {
+                        "id": "a0908969-93f0-40a2-b56d-f843450c579b",
+                        "name": "rsa-generated",
+                        "providerId": "rsa-generated",
+                        "config": {
+                            "privateKey": ["MIIEowIBAAKCAQEA0Z3..."],
+                            "priority": ["100"],
+                            "keySize": ["2048"]
+                        }
+                    },
+                    {
+                        "id": "b1234567-89ab-cdef-0123-456789abcdef",
+                        "name": "rsa-enc-generated",
+                        "providerId": "rsa-enc-generated",
+                        "config": {
+                            "privateKey": ["MIIEpAIBAAKCAQEA7dG..."],
+                            "priority": ["200"],
+                            "algorithm": ["RSA-OAEP"]
+                        }
+                    }
+                ]
+            }
+        })
+    }
+
+    // --- get_private_keys tests ---
+
+    #[test]
+    fn get_private_keys_extracts_from_valid_json() {
+        let json_data = keycloak_realm_fixture();
+        let mut keys = HashMap::new();
+        get_private_keys(&json_data, &mut keys).unwrap();
+
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            keys["a0908969-93f0-40a2-b56d-f843450c579b"],
+            "MIIEowIBAAKCAQEA0Z3..."
+        );
+        assert_eq!(
+            keys["b1234567-89ab-cdef-0123-456789abcdef"],
+            "MIIEpAIBAAKCAQEA7dG..."
+        );
+    }
+
+    #[test]
+    fn get_private_keys_skips_entries_without_private_key() {
+        let json_data = json!({
+            "components": {
+                "org.keycloak.keys.KeyProvider": [
+                    {
+                        "id": "has-key",
+                        "config": {
+                            "privateKey": ["some-key"],
+                            "priority": ["100"]
+                        }
+                    },
+                    {
+                        "id": "no-config"
+                    },
+                    {
+                        "id": "empty-config",
+                        "config": {
+                            "priority": ["100"]
+                        }
+                    }
+                ]
+            }
+        });
+        let mut keys = HashMap::new();
+        get_private_keys(&json_data, &mut keys).unwrap();
+
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys["has-key"], "some-key");
+        assert!(!keys.contains_key("no-config"));
+        assert!(!keys.contains_key("empty-config"));
+    }
+
+    #[test]
+    fn get_private_keys_errors_on_missing_key_provider() {
+        // Missing components entirely
+        let json_data = json!({"realm": "test"});
+        let mut keys = HashMap::new();
+        let result = get_private_keys(&json_data, &mut keys);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("org.keycloak.keys.KeyProvider"));
+
+        // Components present but no KeyProvider
+        let json_data = json!({"components": {}});
+        let mut keys = HashMap::new();
+        let result = get_private_keys(&json_data, &mut keys);
+        assert!(result.is_err());
+    }
+
+    // --- set_private_keys tests ---
+
+    #[test]
+    fn set_private_keys_replaces_with_avp_paths() {
+        let mut json_data = keycloak_realm_fixture();
+        set_private_keys(&mut json_data, |id| format!("<path:replaced#{id}>")).unwrap();
+
+        let providers = json_data["components"]["org.keycloak.keys.KeyProvider"]
+            .as_array()
+            .unwrap();
+
+        assert_eq!(
+            providers[0]["config"]["privateKey"][0],
+            "<path:replaced#a0908969-93f0-40a2-b56d-f843450c579b>"
+        );
+        assert_eq!(
+            providers[1]["config"]["privateKey"][0],
+            "<path:replaced#b1234567-89ab-cdef-0123-456789abcdef>"
+        );
+    }
+
+    #[test]
+    fn set_private_keys_preserves_other_config_fields() {
+        let mut json_data = keycloak_realm_fixture();
+        set_private_keys(&mut json_data, |id| format!("<avp:{id}>")).unwrap();
+
+        let providers = json_data["components"]["org.keycloak.keys.KeyProvider"]
+            .as_array()
+            .unwrap();
+
+        // First provider: priority and keySize should be untouched
+        assert_eq!(providers[0]["config"]["priority"][0], "100");
+        assert_eq!(providers[0]["config"]["keySize"][0], "2048");
+        assert_eq!(providers[0]["name"], "rsa-generated");
+
+        // Second provider: priority and algorithm should be untouched
+        assert_eq!(providers[1]["config"]["priority"][0], "200");
+        assert_eq!(providers[1]["config"]["algorithm"][0], "RSA-OAEP");
+        assert_eq!(providers[1]["name"], "rsa-enc-generated");
+
+        // Realm-level fields should be untouched
+        assert_eq!(json_data["realm"], "my-realm");
+        assert_eq!(json_data["enabled"], true);
+    }
+
+    // --- roundtrip test ---
+
+    #[test]
+    fn roundtrip_extract_then_replace() {
+        let mut json_data = keycloak_realm_fixture();
+
+        // Step 1: Extract private keys
+        let mut keys = HashMap::new();
+        get_private_keys(&json_data, &mut keys).unwrap();
+        assert_eq!(keys.len(), 2);
+
+        // Step 2: Replace with AVP paths
+        let avp = avp_path_generator("secret", "openshift/argocd", "cluster01");
+        set_private_keys(&mut json_data, &avp).unwrap();
+
+        // Step 3: Verify AVP paths are correct
+        let providers = json_data["components"]["org.keycloak.keys.KeyProvider"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            providers[0]["config"]["privateKey"][0],
+            "<path:secret/data/openshift/argocd/cluster01#a0908969-93f0-40a2-b56d-f843450c579b>"
+        );
+        assert_eq!(
+            providers[1]["config"]["privateKey"][0],
+            "<path:secret/data/openshift/argocd/cluster01#b1234567-89ab-cdef-0123-456789abcdef>"
+        );
+
+        // Step 4: Verify extracted keys match original values
+        assert_eq!(
+            keys["a0908969-93f0-40a2-b56d-f843450c579b"],
+            "MIIEowIBAAKCAQEA0Z3..."
+        );
+        assert_eq!(
+            keys["b1234567-89ab-cdef-0123-456789abcdef"],
+            "MIIEpAIBAAKCAQEA7dG..."
+        );
+
+        // Step 5: Other config fields are untouched
+        assert_eq!(providers[0]["config"]["priority"][0], "100");
+        assert_eq!(providers[1]["config"]["algorithm"][0], "RSA-OAEP");
+    }
+
+    // --- synchronize_keys tests ---
+
+    #[test]
+    fn synchronize_keys_filters_to_matching_keys() {
+        let mut vault = json!({"key-a": "val-a", "key-b": "val-b", "key-c": "val-c"});
+        let file = json!({"key-a": "new-a", "key-b": "new-b"});
+
+        synchronize_keys(&mut vault, &file);
+
+        assert_eq!(vault, json!({"key-a": "val-a", "key-b": "val-b"}));
+        assert!(vault.get("key-c").is_none());
+    }
+
+    // --- vault update simulation ---
+
+    #[test]
+    fn vault_update_sync_compare_merge() {
+        // Simulate: vault has keys A, B, C; file has A (changed) and B (unchanged)
+        let file_keys = json!({"key-a": "new-value", "key-b": "same-value"});
+        let mut vault_keys = json!({"key-a": "old-value", "key-b": "same-value", "key-c": "other"});
+
+        // Step 1: Clone vault and synchronize to only file-relevant keys
+        let mut vault_clone = vault_keys.clone();
+        synchronize_keys(&mut vault_clone, &file_keys);
+        assert_eq!(
+            vault_clone,
+            json!({"key-a": "old-value", "key-b": "same-value"})
+        );
+
+        // Step 2: Compare — should detect changes (key-a differs)
+        assert!(!compare_private_keys(&file_keys, &vault_clone));
+
+        // Step 3: Merge file keys into full vault (preserving key-c)
+        merge_json(&mut vault_keys, file_keys);
+        assert_eq!(
+            vault_keys,
+            json!({"key-a": "new-value", "key-b": "same-value", "key-c": "other"})
+        );
     }
 }

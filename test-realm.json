@@ -1,0 +1,47 @@
+{
+  "id": "my-realm",
+  "realm": "my-realm",
+  "displayName": "My Realm",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "components": {
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "id": "a0908969-93f0-40a2-b56d-f843450c579b",
+        "name": "rsa-generated",
+        "providerId": "rsa-generated",
+        "config": {
+          "privateKey": [
+            "MIIEowIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHL5..."
+          ],
+          "priority": ["100"],
+          "keySize": ["2048"]
+        }
+      },
+      {
+        "id": "b1234567-89ab-cdef-0123-456789abcdef",
+        "name": "rsa-enc-generated",
+        "providerId": "rsa-enc-generated",
+        "config": {
+          "privateKey": [
+            "MIIEpAIBAAKCAQEA7dGnRbScT5g2XcNfPvCqYmGFPsL2uFk3..."
+          ],
+          "priority": ["200"],
+          "algorithm": ["RSA-OAEP"]
+        }
+      }
+    ],
+    "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [
+      {
+        "id": "c9876543-21fe-dcba-9876-543210fedcba",
+        "name": "Allowed Protocol Mapper Types",
+        "providerId": "allowed-protocol-mappers",
+        "config": {
+          "allowed-protocol-mapper-types": ["oidc-usermodel-attribute-mapper"]
+        }
+      }
+    ]
+  }
+}
