@@ -5,8 +5,9 @@ use std::path::PathBuf;
 pub fn build_cli() -> Command {
     Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
+        .long_version(env!("RELEASE_NAME"))
         .about("Parses Keycloak files, extracts private keys, and updates Vault")
-        .author("loxley <loxley@loxley@users.noreply.github.com>")
+        .author("loxley <loxley@users.noreply.github.com>")
         // Global arguments
         .arg(
             Arg::new("cluster")
