@@ -9,7 +9,7 @@ use std::path::PathBuf;
     author = "loxley <loxley@users.noreply.github.com>"
 )]
 pub struct Cli {
-    /// Specifies the cluster
+    /// Specifies the cluster (used to derive the default Vault path)
     #[arg(short, long, default_value = "cluster01")]
     pub cluster: String,
 
@@ -42,7 +42,7 @@ pub struct Cli {
     #[arg(short = 'm', long, default_value = "secret")]
     pub vault_mount: String,
 
-    /// Specifies the Vault secret path (to override calculated path)
+    /// Specifies the Vault secret path (overrides the default path derived from --cluster)
     #[arg(short = 'p', long)]
     pub vault_path: Option<String>,
 

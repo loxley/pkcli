@@ -69,9 +69,9 @@ cat exported_keycloak_data.json | ./pkcli -f- -c <CLUSTER> -k <KEYCLOAK-CR-NAME>
 When run without a subcommand, pkcli performs the following steps:
 
 1. Reads the Keycloak realm export JSON and extracts `privateKey` values from `components.org.keycloak.keys.KeyProvider` entries.
-2. Replaces each private key with an AVP inline path reference: `<path:secret/data/openshift/argocd/<cluster>#<id>>`.
+2. Replaces each private key with an AVP inline path reference: `<path:secret/data/<vault-path>#<id>>` (where `vault-path` defaults to `argocd/<cluster>`).
 3. Wraps the modified realm data in a `KeycloakRealmImport` CRD and writes it as YAML.
-4. Compares extracted keys with what is currently in Vault and only updates if changes are detected.
+4. Compares extracted keys with what is currently in Vault at the same path and only updates if changes are detected.
 
 ### CLI Reference
 
@@ -79,14 +79,14 @@ Run `pkcli --help` for all available options:
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--cluster` | `-c` | Cluster name used in Vault path | `cluster01` |
+| `--cluster` | `-c` | Cluster name (used to derive the default Vault path) | `cluster01` |
 | `--filename` | `-f` | Input file (use `-` for stdin) | |
 | `--directory` | `-d` | Process all JSON files in directory | |
 | `--output-directory` | `-o` | Output directory for YAML files | `.` |
 | `--vault-addr` | `-a` | Vault server address | `http://127.0.0.1:8200` |
 | `--vault-token` | `-t` | Vault token (or `VAULT_TOKEN` env var) | |
 | `--vault-mount` | `-m` | Vault mount path | `secret` |
-| `--vault-path` | `-p` | Override the calculated Vault path | |
+| `--vault-path` | `-p` | Override the Vault path, making `--cluster` unused (used for both Vault storage and AVP path references) | `argocd/<cluster>` |
 | `--keycloak-cr-name` | `-k` | Custom name for the Keycloak CR | |
 
 ## Roadmap
