@@ -1,105 +1,65 @@
-use clap::builder::{NonEmptyStringValueParser, ValueParser};
-use clap::{Arg, Command};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-pub fn build_cli() -> Command {
-    Command::new(env!("CARGO_PKG_NAME"))
-        .version(env!("CARGO_PKG_VERSION"))
-        .long_version(env!("RELEASE_NAME"))
-        .about("Parses Keycloak files, extracts private keys, and updates Vault")
-        .author("loxley <loxley@users.noreply.github.com>")
-        // Global arguments
-        .arg(
-            Arg::new("cluster")
-                .short('c')
-                .long("cluster")
-                .value_name("CLUSTER")
-                .help("Specifies the cluster")
-                .value_parser(NonEmptyStringValueParser::new())
-                .default_value("cluster01"),
-        )
-        .arg(
-            Arg::new("filename")
-                .short('f')
-                .long("filename")
-                .value_name("FILE")
-                .help("Specifies the filename to be processed (use '-' to read from stdin)")
-                .conflicts_with("directory")
-                .value_parser(ValueParser::from(parse_file_path)),
-        )
-        .arg(
-            Arg::new("directory")
-                .short('d')
-                .long("directory")
-                .value_name("DIR")
-                .help("Specifies the directory to be processed")
-                .conflicts_with("filename")
-                .value_parser(ValueParser::from(parse_directory_path)),
-        )
-        .arg(
-            Arg::new("output_directory")
-                .short('o')
-                .long("output-directory")
-                .value_name("OUTPUT_DIR")
-                .help("Specifies the output directory (defaults to current directory)")
-                .value_parser(ValueParser::from(parse_directory_path)),
-        )
-        .arg(
-            Arg::new("vault_addr")
-                .short('a')
-                .long("vault-addr")
-                .value_name("VAULT_ADDR")
-                .help("Specifies the Vault server address")
-                .value_parser(NonEmptyStringValueParser::new())
-                .env("VAULT_ADDR")
-                .default_value("http://127.0.0.1:8200"),
-        )
-        .arg(
-            Arg::new("vault_token")
-                .short('t')
-                .long("vault-token")
-                .value_name("VAULT_TOKEN")
-                .help("Specifies the Vault token for authentication")
-                .value_parser(NonEmptyStringValueParser::new())
-                .env("VAULT_TOKEN")
-                .hide_env(true)
-                .required(true),
-        )
-        .arg(
-            Arg::new("vault_mount")
-                .short('m')
-                .long("vault-mount")
-                .value_name("VAULT_MOUNT")
-                .help("Specifies the Vault mount path")
-                .value_parser(NonEmptyStringValueParser::new())
-                .default_value("secret"),
-        )
-        .arg(
-            // This can override the calculated path which is 'openshift/argocd/<cluster>'
-            Arg::new("vault_path")
-                .short('p')
-                .long("vault-path")
-                .value_name("VAULT_PATH")
-                .help("Specifies the Vault secret path (to override calculated path)")
-                .value_parser(NonEmptyStringValueParser::new()),
-        )
-        .arg(
-            Arg::new("keycloak_cr_name")
-                .short('k')
-                .long("keycloak-cr-name")
-                .value_name("KEYCLOAK_CR_NAME")
-                .help("Specifies the Keycloak CR name (use with 'f' option)")
-                .value_parser(NonEmptyStringValueParser::new())
-                .conflicts_with("directory")
-                .requires("filename"),
-        )
-        // Subcommands
-        .subcommand(
-            Command::new("update-avp").about("Updates private keys with argocd-vault-plugin path"),
-        )
-        .subcommand(
-            Command::new("update-vault").about("Updates Vault with private keys from the file"),
-        )
+#[derive(Debug, Parser)]
+#[command(
+    version,
+    long_version = env!("RELEASE_NAME"),
+    about = "Parses Keycloak files, extracts private keys, and updates Vault",
+    author = "loxley <loxley@users.noreply.github.com>"
+)]
+pub struct Cli {
+    /// Specifies the cluster
+    #[arg(short, long, default_value = "cluster01")]
+    pub cluster: String,
+
+    /// Specifies the filename to be processed (use '-' to read from stdin)
+    #[arg(short, long, conflicts_with = "directory", value_parser = parse_file_path)]
+    pub filename: Option<PathBuf>,
+
+    /// Specifies the directory to be processed
+    #[arg(short, long, conflicts_with = "filename", value_parser = parse_directory_path)]
+    pub directory: Option<PathBuf>,
+
+    /// Specifies the output directory (defaults to current directory)
+    #[arg(short, long, value_parser = parse_directory_path)]
+    pub output_directory: Option<PathBuf>,
+
+    /// Specifies the Vault server address
+    #[arg(
+        short = 'a',
+        long,
+        env = "VAULT_ADDR",
+        default_value = "http://127.0.0.1:8200"
+    )]
+    pub vault_addr: String,
+
+    /// Specifies the Vault token for authentication
+    #[arg(short = 't', long, env = "VAULT_TOKEN", hide_env = true)]
+    pub vault_token: String,
+
+    /// Specifies the Vault mount path
+    #[arg(short = 'm', long, default_value = "secret")]
+    pub vault_mount: String,
+
+    /// Specifies the Vault secret path (to override calculated path)
+    #[arg(short = 'p', long)]
+    pub vault_path: Option<String>,
+
+    /// Specifies the Keycloak CR name (use with 'f' option)
+    #[arg(short = 'k', long, conflicts_with = "directory", requires = "filename")]
+    pub keycloak_cr_name: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Option<SubCmd>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubCmd {
+    /// Updates private keys with argocd-vault-plugin path
+    UpdateAvp,
+    /// Updates Vault with private keys from the file
+    UpdateVault,
 }
 
 /// Validate file path

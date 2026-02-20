@@ -1,5 +1,7 @@
+pub mod cli;
+
 use anyhow::{anyhow, bail, Context, Result};
-use clap::ArgMatches;
+use cli::{Cli, SubCmd};
 use serde_json::{json, Value};
 use serde_yaml::Value as YamlValue;
 use std::collections::HashMap;
@@ -36,65 +38,38 @@ struct Config {
 }
 
 impl Config {
-    fn from_matches(matches: &ArgMatches) -> Result<Self> {
-        // Accessing global options
-        let vault_mount = matches
-            .get_one::<String>("vault_mount")
-            .cloned()
-            .expect("'vault_mount' should always have a value");
-        let vault_token = matches
-            .get_one::<String>("vault_token")
-            .cloned()
-            .expect("'vault_token' should always have a value");
-        let vault_addr = matches
-            .get_one::<String>("vault_addr")
-            .cloned()
-            .expect("'vault_addr' should always have a value");
-        let cluster = matches
-            .get_one::<String>("cluster")
-            .cloned()
-            .expect("'cluster' should always have a value");
-
-        // Keycloak CR name
-        let keycloak_cr_name = matches
-            .get_one::<String>("keycloak_cr_name")
-            .cloned()
-            .unwrap_or_default();
+    fn from_cli(cli: &Cli) -> Result<Self> {
+        let cluster = cli.cluster.clone();
+        let keycloak_cr_name = cli.keycloak_cr_name.clone().unwrap_or_default();
 
         // File or directory path
-        let path: PathBuf;
-        if let Some(filename) = matches.get_one::<PathBuf>("filename") {
-            path = filename.clone();
-            // Require keycloak-cr-name if reading from stdin
-            if path.as_os_str() == "-" && keycloak_cr_name.is_empty() {
+        let path = if let Some(ref filename) = cli.filename {
+            if filename.as_os_str() == "-" && keycloak_cr_name.is_empty() {
                 bail!("Please provide --keycloak-cr-name if reading from stdin\n\nFor more information, try '--help'.");
             }
-        } else if let Some(directory) = matches.get_one::<PathBuf>("directory") {
-            path = directory.clone()
+            filename.clone()
+        } else if let Some(ref directory) = cli.directory {
+            directory.clone()
         } else {
             bail!("Please provide either --filename or --directory\n\nFor more information, try '--help'.");
         };
 
-        // Output directory
-        let output_directory = matches
-            .get_one::<PathBuf>("output_directory")
-            .cloned()
+        let output_directory = cli
+            .output_directory
+            .clone()
             .unwrap_or_else(|| PathBuf::from("."));
 
-        // Misc config
         let kv_path = String::from("openshift/argocd");
 
-        // This is an optional override of 'vault_path'
-        let vault_path = matches
-            .get_one::<String>("vault_path")
-            .cloned()
+        let vault_path = cli
+            .vault_path
+            .clone()
             .unwrap_or_else(|| format!("{kv_path}/{cluster}"));
 
-        // Handle subcommands
-        let subcmd = match matches.subcommand() {
-            Some(("update-avp", _)) => SubCommand::UpdateAvp,
-            Some(("update-vault", _)) => SubCommand::UpdateVault,
-            _ => SubCommand::All,
+        let subcmd = match cli.command {
+            Some(SubCmd::UpdateAvp) => SubCommand::UpdateAvp,
+            Some(SubCmd::UpdateVault) => SubCommand::UpdateVault,
+            None => SubCommand::All,
         };
 
         Ok(Config {
@@ -104,17 +79,17 @@ impl Config {
             output_directory,
             path,
             subcmd,
-            vault_addr,
-            vault_mount,
+            vault_addr: cli.vault_addr.clone(),
+            vault_mount: cli.vault_mount.clone(),
             vault_path,
-            vault_token,
+            vault_token: cli.vault_token.clone(),
         })
     }
 }
 
-pub async fn run(matches: ArgMatches) -> Result<()> {
-    // Attempt to create the config from matches
-    let config = Config::from_matches(&matches)?;
+pub async fn run(cli: Cli) -> Result<()> {
+    // Attempt to create the config from CLI args
+    let config = Config::from_cli(&cli)?;
 
     // Vault client
     let vault_client = init_vault_client(&config.vault_addr, &config.vault_token)?;
