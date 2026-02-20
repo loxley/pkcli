@@ -25,9 +25,7 @@ enum SubCommand {
 
 #[derive(Debug)]
 struct Config {
-    cluster: String,
     keycloak_cr_name: String,
-    kv_path: String,
     output_directory: PathBuf,
     path: PathBuf,
     subcmd: SubCommand,
@@ -39,7 +37,6 @@ struct Config {
 
 impl Config {
     fn from_cli(cli: &Cli) -> Result<Self> {
-        let cluster = cli.cluster.clone();
         let keycloak_cr_name = cli.keycloak_cr_name.clone().unwrap_or_default();
 
         // File or directory path
@@ -59,12 +56,11 @@ impl Config {
             .clone()
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let kv_path = String::from("openshift/argocd");
-
+        let kv_path = "argocd";
         let vault_path = cli
             .vault_path
             .clone()
-            .unwrap_or_else(|| format!("{kv_path}/{cluster}"));
+            .unwrap_or_else(|| format!("{kv_path}/{}", cli.cluster));
 
         let subcmd = match cli.command {
             Some(SubCmd::UpdateAvp) => SubCommand::UpdateAvp,
@@ -73,9 +69,7 @@ impl Config {
         };
 
         Ok(Config {
-            cluster,
             keycloak_cr_name,
-            kv_path,
             output_directory,
             path,
             subcmd,
@@ -91,12 +85,17 @@ pub async fn run(cli: Cli) -> Result<()> {
     // Attempt to create the config from CLI args
     let config = Config::from_cli(&cli)?;
 
-    // Vault client
-    let vault_client = init_vault_client(&config.vault_addr, &config.vault_token)?;
-    vault_client
-        .status()
-        .await
-        .context("Failed connection health check")?;
+    // Only init Vault client when needed
+    let vault_client = if config.subcmd != SubCommand::UpdateAvp {
+        let client = init_vault_client(&config.vault_addr, &config.vault_token)?;
+        client
+            .status()
+            .await
+            .context("Failed connection health check")?;
+        Some(client)
+    } else {
+        None
+    };
 
     let paths = if config.path.is_dir() {
         read_dir(&config.path)?
@@ -130,11 +129,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                 run_update_avp(&config, &mut json_data, &path)?;
             }
             SubCommand::UpdateVault => {
-                run_update_vault(&config, &vault_client, &private_keys_file).await?;
+                run_update_vault(&config, vault_client.as_ref().unwrap(), &private_keys_file)
+                    .await?;
             }
             SubCommand::All => {
                 run_update_avp(&config, &mut json_data, &path)?;
-                run_update_vault(&config, &vault_client, &private_keys_file).await?;
+                run_update_vault(&config, vault_client.as_ref().unwrap(), &private_keys_file)
+                    .await?;
             }
         }
     }
@@ -143,7 +144,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 
 /// Update argocd-vault-plugin paths in privateKeys entries and write out to yaml
 fn run_update_avp(config: &Config, json_data: &mut Value, path: &Path) -> Result<()> {
-    let avp = avp_path_generator(&config.vault_mount, &config.kv_path, &config.cluster);
+    let avp = avp_path_generator(&config.vault_mount, &config.vault_path);
     set_private_keys(json_data, avp)?;
 
     // Append CRD stuff
@@ -232,12 +233,8 @@ fn read_json(filename: &Path) -> Result<KeyCloakRealmExport> {
 }
 
 /// Generate AVP paths
-fn avp_path_generator<'a>(
-    mount: &'a str,
-    kv_path: &'a str,
-    cluster: &'a str,
-) -> impl Fn(&str) -> String + 'a {
-    move |id: &str| format!("<path:{mount}/data/{kv_path}/{cluster}#{id}>")
+fn avp_path_generator<'a>(mount: &'a str, vault_path: &'a str) -> impl Fn(&str) -> String + 'a {
+    move |id: &str| format!("<path:{mount}/data/{vault_path}#{id}>")
 }
 
 /// Convert JSON to YAML
@@ -438,11 +435,9 @@ mod tests {
     fn private_avp_path_generator() {
         let id = "a0908969-93f0-40a2-b56d-f843450c579b";
         let mount = "secret";
-        let kv_path = "openshift/argocd";
-        let cluster = "cluster01";
-        let avp_path = avp_path_generator(mount, kv_path, cluster);
-        let expected =
-            "<path:secret/data/openshift/argocd/cluster01#a0908969-93f0-40a2-b56d-f843450c579b>";
+        let vault_path = "argocd/cluster01";
+        let avp_path = avp_path_generator(mount, vault_path);
+        let expected = "<path:secret/data/argocd/cluster01#a0908969-93f0-40a2-b56d-f843450c579b>";
         assert_eq!(avp_path(id), expected);
     }
 
@@ -665,7 +660,7 @@ spec:
         assert_eq!(keys.len(), 2);
 
         // Step 2: Replace with AVP paths
-        let avp = avp_path_generator("secret", "openshift/argocd", "cluster01");
+        let avp = avp_path_generator("secret", "argocd/cluster01");
         set_private_keys(&mut json_data, &avp).unwrap();
 
         // Step 3: Verify AVP paths are correct
@@ -674,11 +669,11 @@ spec:
             .unwrap();
         assert_eq!(
             providers[0]["config"]["privateKey"][0],
-            "<path:secret/data/openshift/argocd/cluster01#a0908969-93f0-40a2-b56d-f843450c579b>"
+            "<path:secret/data/argocd/cluster01#a0908969-93f0-40a2-b56d-f843450c579b>"
         );
         assert_eq!(
             providers[1]["config"]["privateKey"][0],
-            "<path:secret/data/openshift/argocd/cluster01#b1234567-89ab-cdef-0123-456789abcdef>"
+            "<path:secret/data/argocd/cluster01#b1234567-89ab-cdef-0123-456789abcdef>"
         );
 
         // Step 4: Verify extracted keys match original values
